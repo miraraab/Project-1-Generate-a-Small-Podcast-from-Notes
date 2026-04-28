@@ -38,15 +38,26 @@ logger = logging.getLogger(__name__)
 SAMPLE_PATH = Path("data/raw/sample_transcript.txt")
 
 
-def run_pipeline(transcript_text: str, transcript_file, url_input: str):
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
+
+def run_pipeline(
+    transcript_text: str,
+    transcript_file,
+    url_input: str,
+    voice: str,
+    tone: str,
+):
     """
     Full pipeline: transcript → LLM recap → audio.
     Yields progress updates after each stage so the UI updates in real time.
     """
 
-    # Resolve input source
+    # ── Resolve input source ────────────────────────────────────────────────
     if transcript_file is not None:
         source = transcript_file.name
+
     elif url_input.strip():
         from data_processor import load_url
         yield "⏳ Stage 1 of 3 — Fetching article from URL...", "", "", "", None
@@ -54,41 +65,52 @@ def run_pipeline(transcript_text: str, transcript_file, url_input: str):
         if not transcript.is_valid:
             yield f"❌ Could not load URL: {transcript.error}", "", "", "", None
             return
+
         stage1_msg = (
             f"✅ Stage 1 complete — {transcript.word_count:,} words loaded\n"
             f"   Source: {url_input.strip()[:60]}\n\n"
             f"⏳ Stage 2 of 3 — Generating recap script with OpenAI..."
         )
         yield stage1_msg, "", "", "", None
-        script = generate_recap(transcript)
+
+        script = generate_recap(transcript, tone=tone)
         if not script.is_valid:
             yield f"❌ Script generation failed: {script.error}", "", "", "", None
             return
+
         stage2_msg = (
             f"✅ Stage 1 complete — {transcript.word_count:,} words loaded\n\n"
             f"✅ Stage 2 complete — {len(script.key_points)} key points extracted\n\n"
             f"⏳ Stage 3 of 3 — Converting script to audio..."
         )
         yield stage2_msg, script.key_points_display(), script.quiz_display(), _format_script(script), None
-        audio = generate_audio(script)
+
+        audio = generate_audio(script, voice=voice)
         final_msg = (
             f"✅ Stage 1 complete — article fetched\n\n"
             f"✅ Stage 2 complete — {len(script.key_points)} key points extracted\n\n"
             f"✅ Stage 3 complete — Audio ready\n"
-            f"   Duration: {audio.duration_estimate} | Provider: {audio.provider.upper()}\n\n"
+            f"   Duration: {audio.duration_estimate} | Voice: {voice} | Provider: {audio.provider.upper()}\n\n"
             f"🎙️  Your recap podcast is ready!"
         ) if audio.success else (
             f"✅ Stages 1 and 2 complete\n⚠️  Audio failed: {audio.error}"
         )
-        yield final_msg, script.key_points_display(), script.quiz_display(), _format_script(script), audio.file_path if audio.success else None
+        yield (
+            final_msg,
+            script.key_points_display(),
+            script.quiz_display(),
+            _format_script(script),
+            audio.file_path if audio.success else None,
+        )
         return
+
     elif transcript_text.strip():
         source = transcript_text
     else:
         yield "❌ Please paste a transcript, upload a file, or enter a URL.", "", "", "", None
         return
 
-    # Stage 1 — Load transcript
+    # ── Stage 1 — Load transcript ────────────────────────────────────────────
     yield "⏳ Stage 1 of 3 — Loading transcript...", "", "", "", None
 
     transcript = load_transcript(source)
@@ -103,8 +125,8 @@ def run_pipeline(transcript_text: str, transcript_file, url_input: str):
     )
     yield stage1_msg, "", "", "", None
 
-    # Stage 2 — Generate recap script
-    script = generate_recap(transcript)
+    # ── Stage 2 — Generate recap script ─────────────────────────────────────
+    script = generate_recap(transcript, tone=tone)
     if not script.is_valid:
         yield f"❌ Script generation failed: {script.error}", "", "", "", None
         return
@@ -123,8 +145,8 @@ def run_pipeline(transcript_text: str, transcript_file, url_input: str):
         None,
     )
 
-    # Stage 3 — Generate audio
-    audio = generate_audio(script)
+    # ── Stage 3 — Generate audio ─────────────────────────────────────────────
+    audio = generate_audio(script, voice=voice)
 
     if not audio.success:
         final_msg = (
@@ -148,7 +170,7 @@ def run_pipeline(transcript_text: str, transcript_file, url_input: str):
         f"   Class: {transcript.class_name} | Date: {transcript.date}\n\n"
         f"✅ Stage 2 complete — {len(script.key_points)} key points extracted\n\n"
         f"✅ Stage 3 complete — Audio ready\n"
-        f"   Duration: {audio.duration_estimate} | Provider: {audio.provider.upper()}\n\n"
+        f"   Duration: {audio.duration_estimate} | Voice: {voice} | Provider: {audio.provider.upper()}\n\n"
         f"🎙️  Your recap podcast is ready!"
     )
     yield (
@@ -160,8 +182,11 @@ def run_pipeline(transcript_text: str, transcript_file, url_input: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _format_script(script) -> str:
-    """Format the recap script for display in the UI."""
     sections = []
     if script.intro:
         sections.append(f"── INTRO ──\n{script.intro}")
@@ -186,10 +211,12 @@ def load_sample() -> str:
     return "Sample file not found. Add a transcript to data/raw/sample_transcript.txt"
 
 
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(
-        title = "🎙️ Class Recap Podcast Generator",
-    ) as demo:
+    with gr.Blocks(title="🎙️ Class Recap Podcast Generator") as demo:
 
         gr.Markdown("""
         # 🎙️ Class Recap Podcast Generator
@@ -201,7 +228,7 @@ def build_ui() -> gr.Blocks:
 
         with gr.Row():
 
-            # Left column — Input
+            # ── Left column — Input ──────────────────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 📥 Input")
 
@@ -230,13 +257,37 @@ def build_ui() -> gr.Blocks:
                     lines       = 1,
                 )
 
+                gr.Markdown("---")
+                gr.Markdown("### 🎛️ Podcast Options")
+
+                voice_selector = gr.Dropdown(
+                    label   = "🎙️ Voice",
+                    choices = [
+                        "alloy",    # neutral
+                        "echo",     # male
+                        "fable",    # female, warm
+                        "onyx",     # male, deep
+                        "nova",     # female, clear
+                        "shimmer",  # female, expressive
+                    ],
+                    value   = "nova",
+                    info    = "Female: nova · shimmer · fable    Male: onyx · echo    Neutral: alloy",
+                )
+
+                tone_selector = gr.Radio(
+                    label   = "🎭 Podcast style",
+                    choices = ["standard", "humorous", "storytelling", "energetic"],
+                    value   = "standard",
+                    info    = "standard = clean · humorous = light jokes · storytelling = human moments · energetic = high energy",
+                )
+
                 generate_btn = gr.Button(
                     "🎙️  Generate Recap Podcast",
                     variant = "primary",
                     size    = "lg",
                 )
 
-            # Right column — Output
+            # ── Right column — Output ────────────────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 📤 Output")
 
@@ -256,33 +307,42 @@ def build_ui() -> gr.Blocks:
                 with gr.Tabs():
                     with gr.Tab("✅ Key Points"):
                         key_points_box = gr.Textbox(
-                            label            = "Extracted key concepts",
-                            lines            = 8,
-                            interactive      = False,
-                            placeholder      = "Key points appear here after generation...",
+                            label       = "Extracted key concepts",
+                            lines       = 8,
+                            interactive = False,
+                            placeholder = "Key points appear here after generation...",
                         )
                     with gr.Tab("❓ Self-Test"):
                         quiz_box = gr.Textbox(
-                            label            = "Test your understanding",
-                            lines            = 5,
-                            interactive      = False,
-                            placeholder      = "Quiz questions appear here after generation...",
+                            label       = "Test your understanding",
+                            lines       = 5,
+                            interactive = False,
+                            placeholder = "Quiz questions appear here after generation...",
                         )
                     with gr.Tab("📄 Full Script"):
                         script_box = gr.Textbox(
-                            label            = "Full narration script",
-                            lines            = 18,
-                            interactive      = False,
-                            placeholder      = "Full script appears here after generation...",
+                            label       = "Full narration script",
+                            lines       = 18,
+                            interactive = False,
+                            placeholder = "Full script appears here after generation...",
                         )
 
-        # Wire up buttons
+        # ── Wire up buttons ──────────────────────────────────────────────────
         sample_btn.click(fn=load_sample, outputs=transcript_text)
-        clear_btn.click(fn=lambda: ("", None, ""), outputs=[transcript_text, transcript_file, url_input])
+        clear_btn.click(
+            fn      = lambda: ("", None, ""),
+            outputs = [transcript_text, transcript_file, url_input],
+        )
 
         generate_btn.click(
             fn      = run_pipeline,
-            inputs  = [transcript_text, transcript_file, url_input],
+            inputs  = [
+                transcript_text,
+                transcript_file,
+                url_input,
+                voice_selector,
+                tone_selector,
+            ],
             outputs = [status_box, key_points_box, quiz_box, script_box, audio_out],
         )
 
@@ -302,5 +362,7 @@ if __name__ == "__main__":
     ui.launch(
         server_name = "0.0.0.0",
         server_port = 7860,
+        share       = True,
         show_error  = True,
+        show_api    = False
     )

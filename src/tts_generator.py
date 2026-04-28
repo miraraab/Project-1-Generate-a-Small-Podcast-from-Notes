@@ -22,10 +22,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = Path("output")
+OUTPUT_DIR    = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-_VOICE         = "nova"
 _TTS_CHUNK_MAX = 4000
 
 
@@ -81,7 +80,7 @@ def _safe_filename(text: str, max_len: int = 40) -> str:
     return safe[:max_len] or "recap"
 
 
-def _generate_openai(text: str, output_path: Path) -> None:
+def _generate_openai(text: str, output_path: Path, voice: str) -> None:
     """Generate MP3 via OpenAI TTS."""
     from openai import OpenAI
 
@@ -91,14 +90,14 @@ def _generate_openai(text: str, output_path: Path) -> None:
 
     client = OpenAI(api_key=api_key)
     chunks = _chunk_text(text)
-    logger.info("OpenAI TTS: %d chunk(s), voice=%s", len(chunks), _VOICE)
+    logger.info("OpenAI TTS: %d chunk(s), voice=%s", len(chunks), voice)
 
     all_bytes = bytearray()
     for i, chunk in enumerate(chunks):
         logger.info("  Chunk %d/%d (%d chars)", i + 1, len(chunks), len(chunk))
         response = client.audio.speech.create(
             model           = "tts-1",
-            voice           = _VOICE,
+            voice           = voice,          # ← uses passed-in voice
             input           = chunk,
             response_format = "mp3",
         )
@@ -119,10 +118,15 @@ def _generate_gtts(text: str, output_path: Path) -> None:
     gTTS(text=text, lang="en", slow=False).save(str(output_path))
 
 
-def generate_audio(script, filename: Optional[str] = None) -> AudioResult:
+def generate_audio(script, voice: str = "nova", filename: str = None) -> AudioResult:
     """
     Convert a RecapScript into an MP3 audio file.
-    Uses OpenAI TTS if OPENAI_API_KEY is set, otherwise falls back to gTTS.
+
+    Parameters
+    ----------
+    script   : RecapScript
+    voice    : OpenAI TTS voice — alloy | echo | fable | onyx | nova | shimmer
+    filename : optional output filename (without extension)
     """
     if not script.is_valid:
         return AudioResult(
@@ -141,9 +145,9 @@ def generate_audio(script, filename: Optional[str] = None) -> AudioResult:
 
     try:
         if provider == "openai":
-            _generate_openai(tts_text, output_path)
+            _generate_openai(tts_text, output_path, voice=voice)  # ← voice passed through
         else:
-            _generate_gtts(tts_text, output_path)
+            _generate_gtts(tts_text, output_path)                 # gTTS ignoriert voice
 
         result = AudioResult(
             success           = True,
